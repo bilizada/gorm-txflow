@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -185,20 +186,18 @@ func beginNewTransactionWithHooks(baseCtx context.Context, db *gorm.DB, fn func(
 func beginNewTransactionWithHooksOnNewSession(baseCtx context.Context, db *gorm.DB, fn func(ctx context.Context) error) error {
 	hc := &HooksContainer{}
 	ctxWithHooks := context.WithValue(baseCtx, TxHooksKey{}, hc)
-
-	newDB, err := getNewDbSession(db, baseCtx)
+	// If sqlite, return a fresh pool (deterministic behavior)
+	log.Printf("transaction tries to create new db session")
+	newDB, finalize, err := getNewDbSession(db, baseCtx)
 	if err != nil {
 		return err
 	}
+	defer finalize()
 
 	err = newDB.WithContext(ctxWithHooks).Transaction(func(tx *gorm.DB) error {
 		ctxWithHooksAndTx := context.WithValue(ctxWithHooks, TxDBKey{}, tx)
 		tx = tx.WithContext(ctxWithHooksAndTx)
-
-		if err := fn(tx.Statement.Context); err != nil {
-			return err
-		}
-		return nil
+		return fn(tx.Statement.Context)
 	})
 
 	// execute hooks only if commit succeeded
@@ -212,8 +211,32 @@ func beginNewTransactionWithHooksOnNewSession(baseCtx context.Context, db *gorm.
 	return err
 }
 
-func getNewDbSession(db *gorm.DB, ctx context.Context) (*gorm.DB, error) {
-	return db.Session(&gorm.Session{NewDB: true}), nil
+func getNewDbSession(db *gorm.DB, ctx context.Context) (*gorm.DB, func(), error) {
+	if strings.Contains(db.Dialector.Name(), "sqlite") {
+		log.Println("error: sqlite database does not support multi-session transactions")
+		return db.Session(&gorm.Session{NewDB: true}), func() {}, nil
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, nil, fmt.Errorf("get underlying sql.DB: %w", err)
+	}
+
+	// Acquire a pooled connection
+	conn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("acquire pooled connection: %w", err)
+	}
+
+	// Create a new gorm.DB on the pooled connection
+	newGormDB, err := gorm.Open(db.Dialector, db.Config, &gorm.Config{
+		ConnPool: conn,
+	})
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, fmt.Errorf("open gorm on pooled conn: %w", err)
+	}
+	return newGormDB, func() { _ = conn.Close() }, nil
 }
 
 // runNestedUsingSavepoint runs fn inside an existing transaction using savepoints (NESTED).
