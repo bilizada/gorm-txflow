@@ -186,8 +186,12 @@ func beginNewTransactionWithHooksOnNewSession(baseCtx context.Context, db *gorm.
 	hc := &HooksContainer{}
 	ctxWithHooks := context.WithValue(baseCtx, TxHooksKey{}, hc)
 
-	newDB := db.Session(&gorm.Session{NewDB: true})
-	err := newDB.WithContext(ctxWithHooks).Transaction(func(tx *gorm.DB) error {
+	newDB, err := getNewDbSession(db, baseCtx)
+	if err != nil {
+		return err
+	}
+
+	err = newDB.WithContext(ctxWithHooks).Transaction(func(tx *gorm.DB) error {
 		ctxWithHooksAndTx := context.WithValue(ctxWithHooks, TxDBKey{}, tx)
 		tx = tx.WithContext(ctxWithHooksAndTx)
 
@@ -206,6 +210,10 @@ func beginNewTransactionWithHooksOnNewSession(baseCtx context.Context, db *gorm.
 		}
 	}
 	return err
+}
+
+func getNewDbSession(db *gorm.DB, ctx context.Context) (*gorm.DB, error) {
+	return db.Session(&gorm.Session{NewDB: true}), nil
 }
 
 // runNestedUsingSavepoint runs fn inside an existing transaction using savepoints (NESTED).
