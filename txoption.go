@@ -1,4 +1,4 @@
-package txmanager
+package txman
 
 import (
 	"fmt"

@@ -1,4 +1,4 @@
-module GormTx
+module github.com/rancbar/txman
 
 go 1.25
 
