@@ -75,6 +75,19 @@ func (hc *HooksContainer) Execute(ctx context.Context) []error {
 	return errs
 }
 
+// AfterCommit registers a post-commit hook inside an active transaction context.
+// Panics if called outside a transactional context (no HooksContainer found).
+func AfterCommit(ctx context.Context, hook TxHookFunc) {
+	if ctx == nil {
+		panic("AfterCommit: context is nil; must be called inside a transaction")
+	}
+	if hc, _ := ctx.Value(TxHooksKey{}).(*HooksContainer); hc != nil {
+		hc.addHook(hook)
+		return
+	}
+	panic(ErrNoTransaction)
+}
+
 // DoInTransaction runs fn under given propagation, reading the root DB from ctx.
 // fn is func(ctx context.Context) error — the tx-aware context will be passed.
 // Use TxManagerHttpMiddleware or WithDB to attach the root DB into the context beforehand.

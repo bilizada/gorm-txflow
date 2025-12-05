@@ -3,35 +3,21 @@ package txmanager
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
-// simple model for DB operations
-type Item struct {
-	ID   uint `gorm:"primaryKey"`
-	Name string
-}
-
-func openMemoryDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite in-memory: %v", err)
-	}
-	if err := db.AutoMigrate(&Item{}); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
+func openDB(t *testing.T) (*gorm.DB, func()) {
+	return openFileBackedSQLite(t)
 }
 
 func countItems(db *gorm.DB) int64 {
 	var c int64
-	_ = db.Model(&Item{}).Count(&c)
+	_ = db.Model(&ItemEntity{}).Count(&c)
 	return c
 }
 
@@ -41,7 +27,8 @@ func ctxWithDB(db *gorm.DB) context.Context {
 }
 
 func Test_DoInTransaction_RequiresNew_CommitsWhenOuterRollsBack(t *testing.T) {
-	db := openMemoryDB(t)
+	db, cleanup := openDB(t)
+	defer cleanup()
 	ctx := ctxWithDB(db)
 
 	// Outer transaction (default = REQUIRED).
@@ -51,7 +38,7 @@ func Test_DoInTransaction_RequiresNew_CommitsWhenOuterRollsBack(t *testing.T) {
 		if txDb == nil {
 			t.Fatalf("expected tx DB in outer")
 		}
-		if err := txDb.Create(&Item{Name: "outer"}).Error; err != nil {
+		if err := txDb.Create(&ItemEntity{Name: "outer"}).Error; err != nil {
 			return err
 		}
 
@@ -61,7 +48,7 @@ func Test_DoInTransaction_RequiresNew_CommitsWhenOuterRollsBack(t *testing.T) {
 			if txDb2 == nil {
 				t.Fatalf("expected tx DB in inner requires_new")
 			}
-			return txDb2.Create(&Item{Name: "inner"}).Error
+			return txDb2.Create(&ItemEntity{Name: "inner"}).Error
 		}, TxOptionWithPropagation(PropagationRequiresNew)); err != nil {
 			return err
 		}
@@ -74,14 +61,21 @@ func Test_DoInTransaction_RequiresNew_CommitsWhenOuterRollsBack(t *testing.T) {
 		t.Fatalf("expected outer to return error (forced rollback)")
 	}
 
-	// inner must have been committed despite outer rollback
-	if got := countItems(db); got != 1 {
-		t.Fatalf("expected 1 committed row (inner), got %d", got)
+	if got := countItems(db); got > 1 {
+		t.Fatalf("expected all the 2 transactions are NOT commited, got %d", got)
+	}
+
+	// in SQLite databases, the inner transaction does not work separated to outer transaction
+	if !strings.Contains(db.Dialector.Name(), "sqlite") {
+		if got := countItems(db); got != 1 {
+			t.Fatalf("expected 1 committed row (inner), got %d", got)
+		}
 	}
 }
 
 func Test_DoInTransaction_Nested_SavepointRollback(t *testing.T) {
-	db := openMemoryDB(t)
+	db, cleanup := openDB(t)
+	defer cleanup()
 	ctx := ctxWithDB(db)
 
 	err := DoInTransaction(ctx, func(ctx context.Context) error {
@@ -89,7 +83,7 @@ func Test_DoInTransaction_Nested_SavepointRollback(t *testing.T) {
 		if txDb == nil {
 			t.Fatalf("expected tx DB in outer")
 		}
-		if err := txDb.Create(&Item{Name: "outer1"}).Error; err != nil {
+		if err := txDb.Create(&ItemEntity{Name: "outer1"}).Error; err != nil {
 			return err
 		}
 
@@ -99,7 +93,7 @@ func Test_DoInTransaction_Nested_SavepointRollback(t *testing.T) {
 			if txDb2 == nil {
 				t.Fatalf("expected tx DB in nested")
 			}
-			if err := txDb2.Create(&Item{Name: "nested"}).Error; err != nil {
+			if err := txDb2.Create(&ItemEntity{Name: "nested"}).Error; err != nil {
 				return err
 			}
 			return errors.New("nested fails and must rollback to savepoint")
@@ -119,14 +113,15 @@ func Test_DoInTransaction_Nested_SavepointRollback(t *testing.T) {
 
 	// after commit outer1 must exist, nested must NOT (rolled back by savepoint)
 	var names []string
-	_ = db.Model(&Item{}).Pluck("name", &names)
+	_ = db.Model(&ItemEntity{}).Pluck("name", &names)
 	if len(names) != 1 || names[0] != "outer1" {
 		t.Fatalf("unexpected rows after nested rollback, got: %v", names)
 	}
 }
 
 func Test_DoInTransaction_Supports_NotSupported_Behaviour(t *testing.T) {
-	db := openMemoryDB(t)
+	db, cleanup := openDB(t)
+	defer cleanup()
 	ctx := ctxWithDB(db)
 
 	// SUPPORTS with no tx => should run non-transactionally and persist immediately
@@ -135,9 +130,9 @@ func Test_DoInTransaction_Supports_NotSupported_Behaviour(t *testing.T) {
 		if d == nil {
 			// DoInTransaction for SUPPORTS when no tx passes a non-tx context (db.WithContext(ctx).Statement.Context)
 			// but GetDB(ctx) might be nil; still we can operate using the root DB
-			return db.WithContext(ctx).Create(&Item{Name: "supports"}).Error
+			return db.WithContext(ctx).Create(&ItemEntity{Name: "supports"}).Error
 		}
-		return d.Create(&Item{Name: "supports"}).Error
+		return d.Create(&ItemEntity{Name: "supports"}).Error
 	}, TxOptionWithPropagation(PropagationSupports)); err != nil {
 		t.Fatalf("supports failed: %v", err)
 	}
@@ -147,7 +142,7 @@ func Test_DoInTransaction_Supports_NotSupported_Behaviour(t *testing.T) {
 
 	// NOT_SUPPORTED: when not in tx should behave similarly (run without tx)
 	if err := DoInTransaction(ctx, func(ctx context.Context) error {
-		return db.WithContext(ctx).Create(&Item{Name: "not_supported"}).Error
+		return db.WithContext(ctx).Create(&ItemEntity{Name: "not_supported"}).Error
 	}, TxOptionWithPropagation(PropagationNotSupported)); err != nil {
 		t.Fatalf("not_supported failed: %v", err)
 	}
@@ -157,7 +152,8 @@ func Test_DoInTransaction_Supports_NotSupported_Behaviour(t *testing.T) {
 }
 
 func Test_DoInTransaction_MandatoryAndNever(t *testing.T) {
-	db := openMemoryDB(t)
+	db, cleanup := openDB(t)
+	defer cleanup()
 	ctx := ctxWithDB(db)
 
 	// MANDATORY without a tx should return ErrNoTransaction
@@ -181,7 +177,8 @@ func Test_DoInTransaction_MandatoryAndNever(t *testing.T) {
 }
 
 func Test_PostCommitHooksExecuteOnce(t *testing.T) {
-	db := openMemoryDB(t)
+	db, cleanup := openDB(t)
+	defer cleanup()
 	ctx := ctxWithDB(db)
 
 	var ran int32

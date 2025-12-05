@@ -6,19 +6,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// AfterCommit registers a post-commit hook inside an active transaction context.
-// Panics if called outside a transactional context (no HooksContainer found).
-func AfterCommit(ctx context.Context, hook TxHookFunc) {
-	if ctx == nil {
-		panic("AfterCommit: context is nil; must be called inside a transaction")
-	}
-	if hc, _ := ctx.Value(TxHooksKey{}).(*HooksContainer); hc != nil {
-		hc.addHook(hook)
-		return
-	}
-	panic(ErrNoTransaction)
-}
-
 func WithDB(ctx context.Context, db *gorm.DB) context.Context {
 	_, ok := GetDB(ctx)
 	if ok {
