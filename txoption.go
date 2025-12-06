@@ -47,19 +47,38 @@ type TxOption struct {
 	Propagation  PropagationLevel
 }
 
+// WithPropagation Sets the propagation level and returns the tx option
+func (t TxOption) WithPropagation(lvl PropagationLevel) TxOption {
+	t.Propagation = lvl
+	return t
+}
+
+// WithIsolationLevel Sets the isolation level and returns the tx option
+func (t TxOption) WithIsolationLevel(lvl sql.IsolationLevel) TxOption {
+	t.txOptions.Isolation = lvl
+	return t
+}
+
+// WithReadOnly Sets the readonly flag and returns the tx option
+func (t TxOption) WithReadOnly(flag bool) TxOption {
+	t.txOptions.ReadOnly = flag
+	t.setReadLevel = true
+	return t
+}
+
 // TxOptionWithPropagation returns new transaction option with provided PropagationLevel
-func TxOptionWithPropagation(p PropagationLevel) TxOption {
-	return TxOption{Propagation: p}
+func TxOptionWithPropagation(lvl PropagationLevel) TxOption {
+	return TxOption{}.WithPropagation(lvl)
 }
 
 // TxOptionWithIsolationLevel returns new transaction option with provided isolation level
-func TxOptionWithIsolationLevel(i sql.IsolationLevel) TxOption {
-	return TxOption{txOptions: sql.TxOptions{Isolation: i}}
+func TxOptionWithIsolationLevel(lvl sql.IsolationLevel) TxOption {
+	return TxOption{}.WithIsolationLevel(lvl)
 }
 
 // TxOptionWithReadonly returns new transaction option with provided read-only flag
 func TxOptionWithReadonly(flag bool) TxOption {
-	return TxOption{txOptions: sql.TxOptions{ReadOnly: flag}, setReadLevel: true}
+	return TxOption{}.WithReadOnly(flag)
 }
 
 // mergeOptions returns a merged transaction option as result concluded from multiple provided options
