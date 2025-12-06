@@ -1,14 +1,15 @@
 package txman
 
 import (
+	"database/sql"
 	"fmt"
 )
 
-type Propagation int
+type PropagationLevel int
 
-const defaultPropagation = PropagationRequired
 const (
-	PropagationRequired Propagation = iota + 1
+	PropagationDefault PropagationLevel = iota
+	PropagationRequired
 	PropagationRequiresNew
 	PropagationSupports
 	PropagationNotSupported
@@ -17,8 +18,10 @@ const (
 	PropagationNested
 )
 
-func (p Propagation) String() string {
+func (p PropagationLevel) String() string {
 	switch p {
+	case PropagationDefault:
+		return "DEFAULT"
 	case PropagationRequired:
 		return "REQUIRED"
 	case PropagationRequiresNew:
@@ -39,37 +42,49 @@ func (p Propagation) String() string {
 }
 
 type TxOption struct {
-	propagation *Propagation
+	txOptions    sql.TxOptions
+	setReadLevel bool
+	Propagation  PropagationLevel
 }
 
-// TxOptionWithPropagation returns new transaction option with provided propagation
-func TxOptionWithPropagation(p Propagation) TxOption {
-	return TxOption{propagation: &p}
+// TxOptionWithPropagation returns new transaction option with provided PropagationLevel
+func TxOptionWithPropagation(p PropagationLevel) TxOption {
+	return TxOption{Propagation: p}
 }
 
-// Propagation returns the propagation value (getter for unexported field)
-func (o TxOption) Propagation() *Propagation { return o.propagation }
+// TxOptionWithIsolationLevel returns new transaction option with provided isolation level
+func TxOptionWithIsolationLevel(i sql.IsolationLevel) TxOption {
+	return TxOption{txOptions: sql.TxOptions{Isolation: i}}
+}
 
-// fillOptionDefaults returns the option with defaults applied
-func fillOptionDefaults(opt TxOption) TxOption {
-	if opt.propagation == nil {
-		dp := defaultPropagation
-		opt.propagation = &dp
-	}
-	return opt
+// TxOptionWithReadonly returns new transaction option with provided read-only flag
+func TxOptionWithReadonly(flag bool) TxOption {
+	return TxOption{txOptions: sql.TxOptions{ReadOnly: flag}, setReadLevel: true}
 }
 
 // mergeOptions returns a merged transaction option as result concluded from multiple provided options
 func mergeOptions(options ...TxOption) (TxOption, error) {
 	var result TxOption
 	for _, option := range options {
-		if option.propagation != nil {
-			if result.propagation != nil && option.propagation != result.propagation {
-				return TxOption{}, ErrMultiplePropagation
+		if option.Propagation != PropagationDefault {
+			if result.Propagation != PropagationDefault && option.Propagation != result.Propagation {
+				return result, ErrMultiplePropagation
 			}
-			result.propagation = option.propagation
+			result.Propagation = option.Propagation
+		}
+		if option.txOptions.Isolation != sql.LevelDefault {
+			if result.txOptions.Isolation != sql.LevelDefault && option.txOptions.Isolation != result.txOptions.Isolation {
+				return result, ErrMultipleIsolation
+			}
+			result.txOptions.Isolation = option.txOptions.Isolation
+		}
+		if option.setReadLevel == true {
+			if result.setReadLevel && result.txOptions.ReadOnly != option.txOptions.ReadOnly {
+				return result, ErrMultipleReadLevel
+			}
+			result.txOptions.ReadOnly = option.txOptions.ReadOnly
+			result.setReadLevel = true
 		}
 	}
-	result = fillOptionDefaults(result)
 	return result, nil
 }

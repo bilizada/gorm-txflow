@@ -88,11 +88,11 @@ func AfterCommit(ctx context.Context, hook TxHookFunc) {
 	panic(ErrNoTransaction)
 }
 
-// DoInTransaction runs fn under given propagation, reading the root DB from ctx.
+// DoInTransaction runs fn under given PropagationLevel, reading the root DB from ctx.
 // fn is func(ctx context.Context) error — the tx-aware context will be passed.
 // Use TxManagerHttpMiddleware or WithDB to attach the root DB into the context beforehand.
 func DoInTransaction(ctx context.Context, fn func(ctx context.Context) error, txOptions ...TxOption) error {
-	txOption, err := mergeOptions(txOptions...)
+	opt, err := mergeOptions(txOptions...)
 	if err != nil {
 		return err
 	}
@@ -103,16 +103,18 @@ func DoInTransaction(ctx context.Context, fn func(ctx context.Context) error, tx
 		return ErrNoDBAwareContext
 	}
 
-	switch *txOption.propagation {
+	switch opt.Propagation {
+	case PropagationDefault:
+		fallthrough
 	case PropagationRequired:
 		if tx := ctxTx(ctx); tx != nil {
 			// already in tx: pass the same ctx (should be tx-aware) to fn
 			return fn(ctx)
 		}
-		return beginNewTransactionWithHooks(ctx, db, fn)
+		return beginNewTransactionWithHooks(opt, ctx, db, fn)
 
 	case PropagationRequiresNew:
-		return beginNewTransactionWithHooksOnNewSession(ctx, db, fn)
+		return beginNewTransactionWithHooksOnNewSession(opt, ctx, db, fn)
 
 	case PropagationSupports:
 		if tx := ctxTx(ctx); tx != nil {
@@ -141,12 +143,12 @@ func DoInTransaction(ctx context.Context, fn func(ctx context.Context) error, tx
 
 	case PropagationNested:
 		if tx := ctxTx(ctx); tx == nil {
-			return beginNewTransactionWithHooks(ctx, db, fn)
+			return beginNewTransactionWithHooks(opt, ctx, db, fn)
 		}
-		return runNestedUsingSavepoint(ctx, db, fn)
+		return runNestedUsingSavepoint(opt, ctx, db, fn)
 
 	default:
-		return ErrMultiplePropagation
+		return ErrInvalidPropagation
 	}
 }
 
@@ -163,7 +165,7 @@ func ctxTx(ctx context.Context) *gorm.DB {
 
 // beginNewTransactionWithHooks starts a new DB transaction and attaches a HooksContainer and tx pointer to the context.
 // fn receives tx.Statement.Context (the context carrying hooks and tx pointer).
-func beginNewTransactionWithHooks(baseCtx context.Context, db *gorm.DB, fn func(ctx context.Context) error) error {
+func beginNewTransactionWithHooks(opt TxOption, baseCtx context.Context, db *gorm.DB, fn func(ctx context.Context) error) error {
 	hc := &HooksContainer{}
 	ctxWithHooks := context.WithValue(baseCtx, TxHooksKey{}, hc)
 
@@ -180,7 +182,7 @@ func beginNewTransactionWithHooks(baseCtx context.Context, db *gorm.DB, fn func(
 			return err // rollback
 		}
 		return nil // commit
-	})
+	}, &opt.txOptions)
 
 	// If commit succeeded (err == nil), execute hooks now using ctxWithHooks (or another context you prefer).
 	if err == nil {
@@ -196,7 +198,7 @@ func beginNewTransactionWithHooks(baseCtx context.Context, db *gorm.DB, fn func(
 }
 
 // beginNewTransactionWithHooksOnNewSession starts a fresh DB session and transaction (REQUIRES_NEW).
-func beginNewTransactionWithHooksOnNewSession(baseCtx context.Context, db *gorm.DB, fn func(ctx context.Context) error) error {
+func beginNewTransactionWithHooksOnNewSession(opt TxOption, baseCtx context.Context, db *gorm.DB, fn func(ctx context.Context) error) error {
 	hc := &HooksContainer{}
 	ctxWithHooks := context.WithValue(baseCtx, TxHooksKey{}, hc)
 	// If sqlite, return a fresh pool (deterministic behavior)
@@ -211,7 +213,7 @@ func beginNewTransactionWithHooksOnNewSession(baseCtx context.Context, db *gorm.
 		ctxWithHooksAndTx := context.WithValue(ctxWithHooks, TxDBKey{}, tx)
 		tx = tx.WithContext(ctxWithHooksAndTx)
 		return fn(tx.Statement.Context)
-	})
+	}, &opt.txOptions)
 
 	// execute hooks only if commit succeeded
 	if err == nil {
@@ -254,12 +256,12 @@ func getNewDbSession(db *gorm.DB, ctx context.Context) (*gorm.DB, func(), error)
 
 // runNestedUsingSavepoint runs fn inside an existing transaction using savepoints (NESTED).
 // Hooks registered during nested execution attach to top-level HooksContainer so they only run on outer commit.
-func runNestedUsingSavepoint(baseCtx context.Context, db *gorm.DB, fn func(ctx context.Context) error) error {
+func runNestedUsingSavepoint(opt TxOption, baseCtx context.Context, db *gorm.DB, fn func(ctx context.Context) error) error {
 	// locate current tx from context (expect it to be present in ctx)
 	tx := ctxTx(baseCtx)
 	if tx == nil {
 		// defensive fallback: start a new tx
-		return beginNewTransactionWithHooks(baseCtx, db, fn)
+		return beginNewTransactionWithHooks(opt, baseCtx, db, fn)
 	}
 
 	spName := generateSavepointName()
