@@ -50,26 +50,69 @@ func Test_TransactionPropagations_MySQL(t *testing.T) {
 	defer cleanup()
 	rootCtx := ctxWithRootDB(db)
 
-	t.Run("multiple REQUIRED innerly commits atomically on rollback", func(t *testing.T) {
+	t.Run("Write fail due to ReadOnly flag", func(t *testing.T) {
 
 		teardownTest := setupTest(t, db)
 		defer teardownTest(t)
 
 		err := DoInTransaction(rootCtx, func(ctx context.Context) error {
-			txDb, _ := GetDB(ctx)
-			if txDb == nil {
-				t.Fatalf("expected tx DB in outer")
+			// inner ReadOnly transaction should not be able to write because of it's parent transaction's ReadOnly level
+			return DoInTransaction(ctx, func(ctx context.Context) error {
+				txDb2 := MustGetDB(ctx)
+				return txDb2.Create(&ItemEntity{Name: "inner"}).Error
+			}, TxOptionWithReadonly(false))
+		}, TxOptionWithReadonly(true))
+		if err == nil {
+			t.Fatalf("expected error because of writing in a ReadOnly transaction")
+		}
+
+		// transaction must have been rolled back because the ReadOnly flag is true
+		if got := countItems(db); got != 0 {
+			t.Fatalf("expected 0 committed row, got %d", got)
+		}
+	})
+
+	t.Run("Write succeed and ignore ReadOnly flag in inner transaction", func(t *testing.T) {
+
+		teardownTest := setupTest(t, db)
+		defer teardownTest(t)
+
+		err := DoInTransaction(rootCtx, func(ctx context.Context) error {
+			txDb := MustGetDB(ctx)
+			if err := txDb.Create(&ItemEntity{Name: "outer"}).Error; err != nil {
+				return err
 			}
+
+			// inner ReadOnly transaction should be able to write too
+			return DoInTransaction(ctx, func(ctx context.Context) error {
+				txDb2 := MustGetDB(ctx)
+				return txDb2.Create(&ItemEntity{Name: "inner"}).Error
+			}, TxOptionWithReadonly(true))
+		})
+		if err != nil {
+			t.Fatalf("expected error because of writing in a ReadOnly transaction")
+		}
+
+		// inner must have been rolled back according to outer rollback
+		if got := countItems(db); got != 2 {
+			t.Fatalf("expected 0 committed row, got %d", got)
+		}
+	})
+
+	t.Run("REQUIRED rollback all innerly transaction on error", func(t *testing.T) {
+
+		teardownTest := setupTest(t, db)
+		defer teardownTest(t)
+
+		err := DoInTransaction(rootCtx, func(ctx context.Context) error {
+			txDb := MustGetDB(ctx)
 			if err := txDb.Create(&ItemEntity{Name: "outer"}).Error; err != nil {
 				return err
 			}
 
 			// inner REQUIRES_NEW should commit independently
 			err := DoInTransaction(ctx, func(ctx context.Context) error {
-				txDb2, _ := GetDB(ctx)
-				if txDb2 == nil {
-					t.Fatalf("expected tx DB in inner required")
-				}
+				txDb2 := MustGetDB(ctx)
 				return txDb2.Create(&ItemEntity{Name: "inner"}).Error
 			}, TxOptionWithPropagation(PropagationRequired))
 
@@ -95,20 +138,14 @@ func Test_TransactionPropagations_MySQL(t *testing.T) {
 		defer teardownTest(t)
 
 		err := DoInTransaction(rootCtx, func(ctx context.Context) error {
-			txDb, _ := GetDB(ctx)
-			if txDb == nil {
-				t.Fatalf("expected tx DB in outer")
-			}
+			txDb := MustGetDB(ctx)
 			if err := txDb.Create(&ItemEntity{Name: "outer"}).Error; err != nil {
 				return err
 			}
 
 			// inner REQUIRES_NEW should commit independently
 			if err := DoInTransaction(ctx, func(ctx context.Context) error {
-				txDb2, _ := GetDB(ctx)
-				if txDb2 == nil {
-					t.Fatalf("expected tx DB in inner requires_new")
-				}
+				txDb2 := MustGetDB(ctx)
 				return txDb2.Create(&ItemEntity{Name: "inner"}).Error
 			}, TxOptionWithPropagation(PropagationRequiresNew)); err != nil {
 				return err
@@ -133,20 +170,14 @@ func Test_TransactionPropagations_MySQL(t *testing.T) {
 		defer teardownTest(t)
 
 		err := DoInTransaction(rootCtx, func(ctx context.Context) error {
-			txDb, _ := GetDB(ctx)
-			if txDb == nil {
-				t.Fatalf("expected tx DB in outer")
-			}
+			txDb := MustGetDB(ctx)
 			if err := txDb.Create(&ItemEntity{Name: "outer1"}).Error; err != nil {
 				return err
 			}
 
 			// nested which will fail and rollback to savepoint
 			nestedErr := DoInTransaction(ctx, func(ctx context.Context) error {
-				txDb2, _ := GetDB(ctx)
-				if txDb2 == nil {
-					t.Fatalf("expected tx DB in nested")
-				}
+				txDb2 := MustGetDB(ctx)
 				if err := txDb2.Create(&ItemEntity{Name: "nested"}).Error; err != nil {
 					return err
 				}
@@ -181,9 +212,8 @@ func Test_TransactionPropagations_MySQL(t *testing.T) {
 
 		// SUPPORTS: when no tx, should run non-transactionally
 		if err := DoInTransaction(rootCtx, func(ctx context.Context) error {
-			// implementation may pass a db.WithContext(ctx).Statement.Context,
-			// so use root db to insert.
-			return db.WithContext(ctx).Create(&ItemEntity{Name: "supports"}).Error
+			txDb := MustGetDB(ctx)
+			return txDb.WithContext(ctx).Create(&ItemEntity{Name: "supports"}).Error
 		}, TxOptionWithPropagation(PropagationSupports)); err != nil {
 			t.Fatalf("supports failed: %v", err)
 		}
@@ -199,19 +229,19 @@ func Test_TransactionPropagations_MySQL(t *testing.T) {
 
 		// NOT_SUPPORTED: when not in tx should behave similarly (run without tx)
 		err := DoInTransaction(rootCtx, func(ctx context.Context) error {
-			return db.WithContext(ctx).Create(&ItemEntity{Name: "not_supported"}).Error
+			txDb := MustGetDB(ctx)
+			return txDb.WithContext(ctx).Create(&ItemEntity{Name: "not_supported"}).Error
 		}, TxOptionWithPropagation(PropagationNotSupported))
 
 		if err != nil {
 			t.Fatalf("not_supported failed: %v", err)
 		}
 		if got := countItems(db); got != 1 {
-			//if got := countItems(db, "not_supported"); got != 1 {
 			t.Fatalf("not_supported should have persisted immediately, got %d", got)
 		}
 	})
 
-	t.Run("MANDATORY without tx fails; NEVER inside tx fails", func(t *testing.T) {
+	t.Run("MANDATORY without tx fails", func(t *testing.T) {
 
 		teardownTest := setupTest(t, db)
 		defer teardownTest(t)
@@ -220,6 +250,29 @@ func Test_TransactionPropagations_MySQL(t *testing.T) {
 		err := DoInTransaction(rootCtx, func(ctx context.Context) error { return nil }, TxOptionWithPropagation(PropagationMandatory))
 		if !errors.Is(err, ErrNoTransaction) {
 			t.Fatalf("expected ErrNoTransaction from MANDATORY without tx, got %v", err)
+		}
+	})
+
+	t.Run("MANDATORY inside tx success", func(t *testing.T) {
+
+		teardownTest := setupTest(t, db)
+		defer teardownTest(t)
+
+		err := DoInTransaction(rootCtx, func(ctx context.Context) error {
+			// MANDATORY in a tx should succeed
+			return DoInTransaction(ctx, func(ctx context.Context) error {
+				txDb2 := MustGetDB(ctx)
+				return txDb2.WithContext(ctx).Create(&ItemEntity{Name: "mandatory"}).Error
+			}, TxOptionWithPropagation(PropagationMandatory))
+		})
+		if errors.Is(err, ErrNoTransaction) {
+			t.Fatalf("expected no ErrNoTransaction error for MANDATORY because it runs in a transaction, got %v", err)
+		}
+		if err != nil {
+			t.Fatalf("mandatory failed: %v", err)
+		}
+		if got := countItems(db); got != 1 {
+			t.Fatalf("mandatory should have persisted immediately, got %d", got)
 		}
 	})
 
@@ -246,9 +299,10 @@ func Test_TransactionPropagations_MySQL(t *testing.T) {
 		teardownTest := setupTest(t, db)
 		defer teardownTest(t)
 
-		// inside outer tx -> attempt NEVER should fail
+		// without outer tx -> attempt NEVER should succeed
 		err := DoInTransaction(rootCtx, func(ctx context.Context) error {
-			return db.WithContext(ctx).Create(&ItemEntity{Name: "never"}).Error
+			txDb := MustGetDB(ctx)
+			return txDb.WithContext(ctx).Create(&ItemEntity{Name: "never"}).Error
 		}, TxOptionWithPropagation(PropagationNever))
 
 		if err != nil {
@@ -256,7 +310,6 @@ func Test_TransactionPropagations_MySQL(t *testing.T) {
 		}
 
 		if got := countItems(db); got != 1 {
-			//if got := countItems(db, "not_supported"); got != 1 {
 			t.Fatalf("never should have persisted immediately, got %d", got)
 		}
 	})
@@ -281,7 +334,8 @@ func Test_TransactionPropagations_MySQL(t *testing.T) {
 				panic("boom")
 			})
 			// insert and commit
-			return db.WithContext(ctx).Create(&ItemEntity{Name: "required"}).Error
+			txDb := MustGetDB(ctx)
+			return txDb.WithContext(ctx).Create(&ItemEntity{Name: "required"}).Error
 		})
 		if err != nil {
 			t.Fatalf("transaction failed: %v", err)
