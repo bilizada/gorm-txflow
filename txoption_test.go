@@ -1,4 +1,4 @@
-package txman
+package txflow
 
 import (
 	"database/sql"

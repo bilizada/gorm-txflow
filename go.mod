@@ -1,4 +1,4 @@
-module github.com/rancbar/txman
+module github.com/rancbar/gorm-txflow
 
 go 1.25
 
